@@ -58,6 +58,10 @@ class KeaExporter():
     def setup_dhcp4_metrics(self):
         self.metrics_dhcp4 = {
             # Packets
+            'sent_packets': Gauge(
+                '{0}_packets_sent_total'.format(self.prefix_dhcp4),
+                'Packets sent',
+                ['operation']),
             'received_packets': Gauge(
                 '{0}_packets_received'.format(self.prefix_dhcp4),
                 'Number of DHCPv4 packets received',
@@ -89,21 +93,92 @@ class KeaExporter():
         }
 
         self.metrics_dhcp4_map = {
+            # sent_packets
+            'pkt4-ack-sent': {
+                'metric': 'sent_packets',
+                'labels': {
+                    'operation': 'ack'
+                },
+            },
+            'pkt4-nak-sent': {
+                'metric': 'sent_packets',
+                'labels': {
+                    'operation': 'nak'
+                },
+            },
+            'pkt4-offer-sent': {
+                'metric': 'sent_packets',
+                'labels': {
+                    'operation': 'offer'
+                },
+            },
+
             # received_packets
-            'pkt4-received': {
+            'pkt4-discover-received': {
                 'metric': 'received_packets',
                 'labels': {
-                    'operation': 'all'}
+                    'operation': 'discover'
+                }
+            },
+            'pkt4-offer-received': {
+                'metric': 'received_packets',
+                'labels': {
+                    'operation': 'offer'
+                }
+            },
+            'pkt4-request-received': {
+                'metric': 'received_packets',
+                'labels': {
+                    'operation': 'request'
+                }
+            },
+            'pkt4-ack-received': {
+                'metric': 'received_packets',
+                'labels': {
+                    'operation': 'ack'
+                }
+            },
+            'pkt4-nak-received': {
+                'metric': 'received_packets',
+                'labels': {
+                    'operation': 'nak'
+                }
+            },
+            'pkt4-release-received': {
+                'metric': 'received_packets',
+                'labels': {
+                    'operation': 'release'
+                }
+            },
+            'pkt4-decline-received': {
+                'metric': 'received_packets',
+                'labels': {
+                    'operation': 'decline'
+                }
+            },
+            'pkt4-inform-received': {
+                'metric': 'received_packets',
+                'labels': {
+                    'operation': 'inform'
+                }
+            },
+            'pkt4-unknown-received': {
+                'metric': 'received_packets',
+                'labels': {
+                    'operation': 'unknown'
+                }
             },
             'pkt4-parse-failed': {
                 'metric': 'received_packets',
                 'labels': {
-                    'operation': 'parse-failed'}
+                    'operation': 'parse-failed'
+                }
             },
             'pkt4-receive-drop': {
                 'metric': 'received_packets',
                 'labels': {
-                    'operation': 'dropped'}
+                    'operation': 'drop'
+                }
             },
 
             # per Subnet
@@ -128,6 +203,9 @@ class KeaExporter():
         }
 
         self.metrics_dhcp4_ignore = [
+            # sums of different packet types
+            'pkt4-sent',
+            'pkt4-received',
             # sums of subnet values
             'declined-addresses',
             'declined-reclaimed-addresses',
