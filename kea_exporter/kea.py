@@ -1,34 +1,19 @@
 import os
 import re
-import socket
 import sys
-from enum import Enum
-
-import click
-import hjson as json
-import inotify.adapters
-import inotify.constants
+import requests
+import json
 from prometheus_client import Gauge
 
 
-class Module(Enum):
-    DHCP4 = 1
-    DHCP6 = 2
 
-
-class KeaExporter:
+class KeaExporter():
     subnet_pattern = re.compile(
         r"subnet\[(?P<subnet_idx>[\d]+)\]\.(?P<metric>[\w-]+)")
 
-    msg_statistics_all = bytes(
-        json.dumpsJSON({'command': 'statistic-get-all'}), 'utf-8')
+    def __init__(self, target):
 
-    def __init__(self, config_path):
-        # kea control socket
-        self.sock_dhcp6 = None
-        self.sock_dhcp6_path = None
-        self.sock_dhcp4 = None
-        self.sock_dhcp4_path = None
+        self._target = target
 
         # prometheus
         self.prefix = 'kea'
@@ -45,183 +30,80 @@ class KeaExporter:
         self.metrics_dhcp6_ignore = None
         self.setup_dhcp6_metrics()
 
-        # kea config
-        self.config_path = config_path
-        self.config = None
+        self.Modules = []
+        self.subnets = {}
 
-        self.inotify = inotify.adapters.Inotify()
-        self.inotify.add_watch(
-            config_path, mask=inotify.constants.IN_MODIFY
-        )
+        self.load_modules()
+        self.load_subnets()
 
-        self.load_config()
 
-    def load_config(self):
-        with open(self.config_path, 'r') as handle:
-            self.config = json.load(handle)
+    def load_modules(self):
+        r = requests.post(self._target, json = {'command': 'config-get'},
+            headers={'Content-Type': 'application/json'})
+        config= r.json()
+        for module in (config[0]['arguments']['Control-agent']
+            ['control-sockets']):
+            self.Modules.append(module)
 
-        try:
-            sock_path = self.config['Dhcp4']['control-socket']['socket-name']
-            if not os.access(sock_path, os.F_OK):
-                raise FileNotFoundError()
-            if not os.access(sock_path, os.R_OK | os.W_OK):
-                raise PermissionError()
-            self.sock_dhcp4_path = sock_path
-        except KeyError:
-            click.echo('Dhcp4.control-socket.socket-name not configured, '
-                       'will not be exporting Dhcp4 metrics', file=sys.stderr)
-        except FileNotFoundError:
-            click.echo('Dhcp4 control-socket configured, but it does not '
-                       'exist. Is Kea running?', file=sys.stderr)
-            sys.exit(1)
-        except PermissionError:
-            click.echo('Dhcp4 control-socket is not read-/writeable.',
-                       file=sys.stderr)
-            sys.exit(1)
 
-        try:
-            sock_path = self.config['Dhcp6']['control-socket']['socket-name']
-            if not os.access(sock_path, os.F_OK):
-                raise FileNotFoundError()
-            if not os.access(sock_path, os.R_OK | os.W_OK):
-                raise PermissionError()
-            self.sock_dhcp6_path = sock_path
-        except KeyError:
-            click.echo('Dhcp6.control-socket.socket-name not configured, '
-                       'will not be exporting Dhcp6 metrics', file=sys.stderr)
-        except FileNotFoundError:
-            click.echo('Dhcp6 control-socket configured, but it does not '
-                       'exist. Is Kea running?', file=sys.stderr)
-            sys.exit(1)
-        except PermissionError:
-            click.echo('Dhcp6 control-socket is not read-/writeable.',
-                       file=sys.stderr)
-            sys.exit(1)
+    def load_subnets(self):
+        r = requests.post(self._target, json = {'command': 'config-get',
+            'service': self.Modules },
+            headers={'Content-Type': 'application/json'})
+        config = r.json()
+        for subnet in (config[0]['arguments']['Dhcp4']['subnet4']):
+            self.subnets.update( {subnet['id']: subnet['subnet']} )
+
 
     def setup_dhcp4_metrics(self):
         self.metrics_dhcp4 = {
             # Packets
-            'sent_packets': Gauge(
-                '{0}_packets_sent_total'.format(self.prefix_dhcp4),
-                'Packets sent',
-                ['operation']),
             'received_packets': Gauge(
-                '{0}_packets_received_total'.format(self.prefix_dhcp4),
-                'Packets received',
+                '{0}_packets_received'.format(self.prefix_dhcp4),
+                'Number of DHCPv4 packets received',
                 ['operation']),
 
             # per Subnet
             'addresses_assigned_total': Gauge(
                 '{0}_addresses_assigned_total'.format(self.prefix_dhcp4),
                 'Assigned addresses',
-                ['subnet']),
+                ['id', 'subnet']),
             'addresses_declined_total': Gauge(
                 '{0}_addresses_declined_total'.format(self.prefix_dhcp4),
                 'Declined counts',
-                ['subnet']),
+                ['id', 'subnet']),
             'addresses_declined_reclaimed_total': Gauge(
                 '{0}_addresses_declined_reclaimed_total'.format(
                     self.prefix_dhcp4),
                 'Declined addresses that were reclaimed',
-                ['subnet']),
+                ['id', 'subnet']),
             'addresses_reclaimed_total': Gauge(
                 '{0}_addresses_reclaimed_total'.format(self.prefix_dhcp4),
                 'Expired addresses that were reclaimed',
-                ['subnet']),
+                ['id', 'subnet']),
             'addresses_total': Gauge(
                 '{0}_addresses_total'.format(self.prefix_dhcp4),
                 'Size of subnet address pool',
-                ['subnet']
+                ['id', 'subnet']
             )
         }
 
         self.metrics_dhcp4_map = {
-            # sent_packets
-            'pkt4-ack-sent': {
-                'metric': 'sent_packets',
-                'labels': {
-                    'operation': 'ack'
-                },
-            },
-            'pkt4-nak-sent': {
-                'metric': 'sent_packets',
-                'labels': {
-                    'operation': 'nak'
-                },
-            },
-            'pkt4-offer-sent': {
-                'metric': 'sent_packets',
-                'labels': {
-                    'operation': 'offer'
-                },
-            },
-
             # received_packets
-            'pkt4-discover-received': {
+            'pkt4-received': {
                 'metric': 'received_packets',
                 'labels': {
-                    'operation': 'discover'
-                }
-            },
-            'pkt4-offer-received': {
-                'metric': 'received_packets',
-                'labels': {
-                    'operation': 'offer'
-                }
-            },
-            'pkt4-request-received': {
-                'metric': 'received_packets',
-                'labels': {
-                    'operation': 'request'
-                }
-            },
-            'pkt4-ack-received': {
-                'metric': 'received_packets',
-                'labels': {
-                    'operation': 'ack'
-                }
-            },
-            'pkt4-nak-received': {
-                'metric': 'received_packets',
-                'labels': {
-                    'operation': 'nak'
-                }
-            },
-            'pkt4-release-received': {
-                'metric': 'received_packets',
-                'labels': {
-                    'operation': 'release'
-                }
-            },
-            'pkt4-decline-received': {
-                'metric': 'received_packets',
-                'labels': {
-                    'operation': 'decline'
-                }
-            },
-            'pkt4-inform-received': {
-                'metric': 'received_packets',
-                'labels': {
-                    'operation': 'inform'
-                }
-            },
-            'pkt4-unknown-received': {
-                'metric': 'received_packets',
-                'labels': {
-                    'operation': 'unknown'
-                }
+                    'operation': 'all'}
             },
             'pkt4-parse-failed': {
                 'metric': 'received_packets',
                 'labels': {
-                    'operation': 'parse-failed'
-                }
+                    'operation': 'parse-failed'}
             },
             'pkt4-receive-drop': {
                 'metric': 'received_packets',
                 'labels': {
-                    'operation': 'drop'
-                }
+                    'operation': 'dropped'}
             },
 
             # per Subnet
@@ -246,15 +128,13 @@ class KeaExporter:
         }
 
         self.metrics_dhcp4_ignore = [
-            # sums of different packet types
-            'pkt4-sent',
-            'pkt4-received',
             # sums of subnet values
             'declined-addresses',
             'declined-reclaimed-addresses',
             'reclaimed-declined-addresses',
             'reclaimed-leases'
         ]
+
 
     def setup_dhcp6_metrics(self):
         self.metrics_dhcp6 = {
@@ -466,31 +346,23 @@ class KeaExporter:
             'reclaimed-leases'
         ]
 
+
     def update(self):
-        reload_config = False
-        for event in self.inotify.event_gen():
-            if not event:
-                break
-            reload_config = True
+        # Note for future testing: pipe curl output to jq for an easier read
+        for m in self.Modules:
+            list = []
+            list.append(m)
+            r = requests.post(self._target, json = {'command':
+                'statistic-get-all', 'arguments': { }, 'service': list },
+                 headers={'Content-Type': 'application/json'})
+            self.parse_metrics(r.json(), m)
 
-        if reload_config:
-            click.echo('Config was modified, reloading...', file=sys.stderr)
-            self.load_config()
-
-        for sock_path, module in [(self.sock_dhcp4_path, Module.DHCP4),
-                                  (self.sock_dhcp6_path, Module.DHCP6)]:
-            if sock_path is None:
-                continue
-
-            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-                sock.connect(sock_path)
-                sock.send(KeaExporter.msg_statistics_all)
-                response = sock.recv(8192).decode()
-                self.parse_metrics(json.loads(response), module)
 
     def parse_metrics(self, response, module):
-        for key, data in response['arguments'].items():
-            if module is Module.DHCP4:
+        # From the JSON reply, take the first array, index 'arguments'; then
+        # return a list of the dictionary's key/values
+        for key, data in response[0]['arguments'].items():
+            if module == 'dhcp4':
                 if key in self.metrics_dhcp4_ignore:
                     continue
             else:
@@ -500,23 +372,27 @@ class KeaExporter:
             value, timestamp = data[0]
             labels = {}
 
-            # lookup subnet
             if key.startswith('subnet['):
                 match = self.subnet_pattern.match(key)
-                if match:
-                    subnet_idx = int(match.group('subnet_idx')) - 1
-                    key = match.group('metric')
 
-                    if module is Module.DHCP4:
-                        subnet = self.config['Dhcp4']['subnet4'][subnet_idx]
+                if match:
+                    subnet_idx = int(match.group('subnet_idx'))
+
+                    key = match.group('metric')
+                    if module == 'dhcp4':
+                        idx = subnet_idx
+                        subnet = self.subnets.get(subnet_idx)
                     else:
-                        subnet = self.config['Dhcp6']['subnet6'][subnet_idx]
-                    labels['subnet'] = subnet['subnet']
+                        # To-do: add support for DHCPv6
+                        pass
+
+                    labels['subnet'] = subnet
+                    labels['id'] = idx
                 else:
-                    click.echo('subnet pattern failed for metric: {0}'.format(
+                    print('subnet pattern failed for metric: {0}'.format(
                         key), file=sys.stderr)
 
-            if module is Module.DHCP4:
+            if module == 'dhcp4':
                 metric_info = self.metrics_dhcp4_map[key]
                 metric = self.metrics_dhcp4[metric_info['metric']]
             else:
