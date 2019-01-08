@@ -32,6 +32,7 @@ class KeaExporter():
 
         self.Modules = []
         self.subnets = {}
+        self.subnets6 = {}
 
         self.load_modules()
         self.load_subnets()
@@ -51,8 +52,11 @@ class KeaExporter():
             'service': self.Modules },
             headers={'Content-Type': 'application/json'})
         config = r.json()
-        for subnet in (config[0]['arguments']['Dhcp4']['subnet4']):
-            self.subnets.update( {subnet['id']: subnet['subnet']} )
+        for module in config:
+            for subnet in (module['arguments'].get('Dhcp4', {}).get('subnet4', {})):
+                self.subnets.update( {subnet['id']: subnet['subnet']} )
+            for subnet in (module['arguments'].get('Dhcp6', {}).get('subnet6', {})):
+                self.subnets6.update( {subnet['id']: subnet['subnet']} )
 
 
     def setup_dhcp4_metrics(self):
@@ -242,37 +246,37 @@ class KeaExporter():
             'addresses_declined_total': Gauge(
                 '{0}_addresses_declined_total'.format(self.prefix_dhcp6),
                 'Declined addresses',
-                ['subnet']),
+                ['id', 'subnet']),
             'addresses_declined_reclaimed_total': Gauge(
                 '{0}_addresses_declined_reclaimed_total'.format(
                     self.prefix_dhcp6),
                 'Declined addresses that were reclaimed',
-                ['subnet']),
+                ['id', 'subnet']),
             'addresses_reclaimed_total': Gauge(
                 '{0}_addresses_reclaimed_total'.format(self.prefix_dhcp6),
                 'Expired addresses that were reclaimed',
-                ['subnet']),
+                ['id', 'subnet']),
 
             # IA_NA
             'na_assigned_total': Gauge(
                 '{0}_na_assigned_total'.format(self.prefix_dhcp6),
                 'Assigned non-temporary addresses (IA_NA)',
-                ['subnet']),
+                ['id', 'subnet']),
             'na_total': Gauge(
                 '{0}_na_total'.format(self.prefix_dhcp6),
                 'Size of non-temporary address pool',
-                ['subnet']
+                ['id', 'subnet']
             ),
 
             # IA_PD
             'pd_assigned_total': Gauge(
                 '{0}_pd_assigned_total'.format(self.prefix_dhcp6),
                 'Assigned prefix delegations (IA_PD)',
-                ['subnet']),
+                ['id', 'subnet']),
             'pd_total': Gauge(
                 '{0}_pd_total'.format(self.prefix_dhcp6),
                 'Size of prefix delegation pool',
-                ['subnet']
+                ['id', 'subnet']
             ),
 
         }
@@ -461,8 +465,8 @@ class KeaExporter():
                         idx = subnet_idx
                         subnet = self.subnets.get(subnet_idx)
                     else:
-                        # To-do: add support for DHCPv6
-                        pass
+                        idx = subnet_idx
+                        subnet = self.subnets6.get(subnet_idx)
 
                     labels['subnet'] = subnet
                     labels['id'] = idx
