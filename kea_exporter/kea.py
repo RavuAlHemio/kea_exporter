@@ -53,9 +53,9 @@ class KeaExporter():
             headers={'Content-Type': 'application/json'})
         config = r.json()
         for module in config:
-            for subnet in (module['arguments'].get('Dhcp4', {}).get('subnet4', {})):
+            for subnet in (module.get('arguments', {}).get('Dhcp4', {}).get('subnet4', {})):
                 self.subnets.update( {subnet['id']: subnet['subnet']} )
-            for subnet in (module['arguments'].get('Dhcp6', {}).get('subnet6', {})):
+            for subnet in (module.get('arguments', {}).get('Dhcp6', {}).get('subnet6', {})):
                 self.subnets6.update( {subnet['id']: subnet['subnet']} )
 
 
@@ -443,7 +443,7 @@ class KeaExporter():
     def parse_metrics(self, response, module):
         # From the JSON reply, take the first array, index 'arguments'; then
         # return a list of the dictionary's key/values
-        for key, data in response[0]['arguments'].items():
+        for key, data in response[0].get('arguments', {}).items():
             if module == 'dhcp4':
                 if key in self.metrics_dhcp4_ignore:
                     continue
